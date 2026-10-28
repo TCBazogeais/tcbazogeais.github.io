@@ -282,6 +282,8 @@
     }
     .partage a { background: #25d366; color: #0b2915; }
     .partage button { background: var(--carte); color: var(--texte); border: 2px solid var(--ligne); }
+    .secret { -webkit-text-security: disc; text-security: disc; letter-spacing: .2em; }
+    .ou { color: var(--doux); font-size: 15px; margin: 22px 0 0; text-align: center; }
     .info { background: var(--vert-clair); color: var(--vert); border-radius: 10px; padding: 10px 12px; font-weight: 600; margin: 12px 0; }
     [hidden] { display: none !important; }
   </style>
@@ -308,7 +310,7 @@
     var URL_API = 'https://script.google.com/macros/s/AKfycbw6zkDi717zVCuxSCE4YUY7KYUMTSJroeg_sjgdOOa3m1MFUf7jbcJBKdRbhFOrDKZd5g/exec';
     var FONCTIONS_SERVEUR = ['getDonnees', 'repondre', 'inscrire', 'demanderLienCapitaine', 'infoCapitaine', 'deconnecterCapitaine',
       'getDonneesCapitaines', 'enregistrerRencontre', 'supprimerRencontre', 'renommerJoueur', 'supprimerJoueur',
-      'validerCodeCapitaine', 'definirSelection'];
+      'validerCodeCapitaine', 'definirSelection', 'definirCodePerso', 'connexionCodePerso'];
     var surAppsScript = !!(window.google && google.script && google.script.run);
 
     /** Même usage que google.script.run : serveur().withSuccessHandler(…).withFailureHandler(…).fonction(args). */
@@ -376,6 +378,7 @@
     var renommage = null;      // joueur en cours de renommage
     var capEmail = '';         // adresse saisie à la connexion capitaine
     var codeEnvoye = false;    // le mail avec le code est parti : afficher la saisie du code
+    var modeMail = false;      // connexion par code reçu par mail (1re fois ou code capitaine oublié)
     var selId = '';            // rencontre ouverte dans l'écran Sélection
     var selEnCours = 0;        // enregistrements de sélection en attente de réponse
     var invitationInstall = null; // évènement beforeinstallprompt (Android / ordinateur)
@@ -589,7 +592,7 @@
           '<li>Appui long sur l\'icône <b>' + nav + '</b> → <b>ⓘ Infos sur l\'application</b>.</li>' +
           '<li><b>Autres autorisations</b> → <b>Raccourcis sur l\'écran d\'accueil</b> → <b>Accepter</b>.</li>' +
           '<li>Reviens ici et recommence l\'installation (menu ⋮ → Ajouter à l\'écran d\'accueil).</li></ol></div>') +
-        '<p class="sous">Capitaine ? Dans l\'appli, ⚙️ Espace capitaines → ton adresse → tape le <b>code reçu par mail</b>.</p></div>';
+        '<p class="sous">Capitaine ? Dans l\'appli, ⚙️ Espace capitaines → ton adresse → ton <b>code capitaine</b> (la 1re fois : code reçu par mail).</p></div>';
     }
 
     window.addEventListener('beforeinstallprompt', function (e) {
@@ -786,6 +789,7 @@
       if (vue === 'cap-tableau') return ecranTableau();
       if (vue === 'cap-selection') return selId ? ecranSelectionMatch() : ecranSelection();
       if (vue === 'cap-joueurs') return ecranJoueurs();
+      if (vue === 'cap-code') return ecranCodePerso();
       var nbAttente = donnees.rencontres.filter(function (r) { return r.statut !== 'Validée'; }).length;
       return '<div class="cap"><button class="retour" data-vue="matchs">← Retour aux matchs</button><h2>⚙️ Espace capitaines</h2><p class="sous">Connecté : ' + esc(capitaine) + '</p>' +
         (messageCap ? '<div class="info">' + esc(messageCap) + '</div>' : '') +
@@ -799,6 +803,7 @@
           tuile('matchs', '🎾', 'Page des joueurs', 'Revenir aux matchs') +
           (appliInstallee() ? '' : tuile('installer', '📲', 'Installer l\'appli', 'Icône sur ton téléphone')) +
         '</div>' +
+        '<p class="pied"><button data-vue="cap-code">🔑 Choisir ou changer mon code capitaine</button></p>' +
         '<p class="pied"><button id="deconnexion-cap">Se déconnecter de l\'espace capitaines</button></p></div>';
     }
 
@@ -814,20 +819,41 @@
     }
 
     function ecranConnexionCap() {
-      return '<div class="cap"><button class="retour" data-vue="matchs">← Retour aux matchs</button>' +
+      var html = '<div class="cap"><button class="retour" data-vue="matchs">← Retour aux matchs</button>' +
         '<h2>⚙️ Espace capitaines</h2>' +
-        '<p class="sous">Réservé aux capitaines. Tape ton adresse : tu recevras un code de connexion par mail. ' +
-        'Ton téléphone s\'en souviendra ensuite.</p>' +
+        '<p class="sous">' + (modeMail
+          ? 'Première connexion ou code oublié : tu reçois un code par mail, puis tu choisis ton code capitaine.'
+          : 'Réservé aux capitaines. Tape ton adresse et ton code capitaine. Ton téléphone s\'en souviendra ensuite.') + '</p>' +
         (messageCap ? '<div class="info">' + esc(messageCap) + '</div>' : '') +
-        '<form id="form-cap-connexion"><div class="champ"><label for="cap-email">Ton adresse e-mail</label>' +
-        '<input id="cap-email" type="email" autocomplete="email" placeholder="prenom.nom@gmail.com" required value="' + esc(capEmail) + '"></div>' +
+        '<div class="champ"><label for="cap-email">Ton adresse e-mail</label>' +
+        '<input id="cap-email" type="email" autocomplete="email" placeholder="prenom.nom@gmail.com" value="' + esc(capEmail) + '"></div>';
+      if (!modeMail) {
+        return html + '<form id="form-cap-perso"><div class="champ"><label for="cap-perso">Ton code capitaine (6 chiffres)</label>' +
+          '<input id="cap-perso" type="password" inputmode="numeric" autocomplete="current-password" maxlength="6" placeholder="••••••"></div>' +
+          '<button class="gros" type="submit">Me connecter</button></form>' +
+          '<p class="ou">Première connexion ou code oublié ?</p>' +
+          '<button class="gros second" id="mode-mail">✉️ Recevoir un code par mail</button></div>';
+      }
+      return html + '<form id="form-cap-connexion">' +
         '<button class="gros' + (codeEnvoye ? ' second' : '') + '" type="submit">' + (codeEnvoye ? 'Renvoyer un mail' : 'Recevoir mon code par mail') + '</button></form>' +
         (codeEnvoye
           ? '<form id="form-cap-code" style="margin-top:18px"><div class="champ"><label for="cap-code">Code à 6 chiffres reçu par mail</label>' +
             '<input id="cap-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" required></div>' +
             '<button class="gros" type="submit">Me connecter</button></form>'
-          : '<button class="lien" id="deja-code">J\'ai déjà reçu un code</button>') +
-        '</div>';
+          : '<button class="lien" id="deja-code">J\'ai déjà reçu un code par mail</button>') +
+        '<p class="ou"><button class="lien" id="mode-perso">J\'ai déjà mon code capitaine</button></p></div>';
+    }
+
+    function ecranCodePerso() {
+      return enTeteCap('🔑 Mon code capitaine') +
+        '<p class="sous">Choisis 6 chiffres. La prochaine fois (nouveau téléphone, après une déconnexion), ' +
+        'tu taperas ton adresse et ce code, sans attendre de mail. Garde-le pour toi.</p>' +
+        '<form id="form-code-perso"><div class="champ"><label for="code-perso-1">Ton nouveau code (6 chiffres)</label>' +
+        '<input id="code-perso-1" class="secret" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="••••••"></div>' +
+        '<div class="champ"><label for="code-perso-2">Tape-le une 2e fois</label>' +
+        '<input id="code-perso-2" class="secret" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="••••••"></div>' +
+        '<button class="gros" type="submit">Enregistrer mon code</button></form>' +
+        '<button class="gros second" data-vue="cap">Plus tard</button></div>';
     }
 
     function ecranFormRencontre() {
@@ -1244,6 +1270,11 @@
         installer();
       } else if (cible.id === 'installer-direct') {
         installerMaintenant();
+      } else if (cible.id === 'mode-mail' || cible.id === 'mode-perso') {
+        capEmail = (document.getElementById('cap-email') || {}).value || capEmail;
+        modeMail = cible.id === 'mode-mail';
+        messageCap = '';
+        rendre();
       } else if (cible.id === 'deja-code') {
         capEmail = (document.getElementById('cap-email') || {}).value || capEmail;
         codeEnvoye = true;
@@ -1284,6 +1315,7 @@
       } else if (cible.id === 'deconnexion-cap') {
         serveur().deconnecterCapitaine(jeton);
         deconnexionCap();
+        modeMail = false;
         allerA('matchs');
       } else if (cible.hasAttribute('data-groupe')) {
         inscrire(cible.getAttribute('data-groupe'));
@@ -1304,6 +1336,7 @@
       if (e.target.id === 'form-cap-connexion') {
         e.preventDefault();
         var email = document.getElementById('cap-email').value.trim();
+        if (!email) { afficherErreur('Tape ton adresse e-mail.'); return; }
         var bouton = e.target.querySelector('button');
         bouton.disabled = true;
         capEmail = email;
@@ -1321,17 +1354,59 @@
         b2.disabled = true;
         serveur()
           .withSuccessHandler(function (r) {
-            jeton = r.jeton;
-            ecrireJeton(jeton);
             codeEnvoye = false;
-            messageCap = '';
-            serveur()
-              .withSuccessHandler(function (info) { capitaine = info.email; allerA('cap'); })
-              .withFailureHandler(function (err) { afficherErreur(err.message); })
-              .infoCapitaine(jeton);
+            modeMail = false;
+            // Connecté grâce au mail : on propose tout de suite de choisir son code capitaine.
+            connecterCapitaine(r.jeton, 'cap-code');
           })
           .withFailureHandler(function (err) { b2.disabled = false; afficherErreur(err && err.message ? err.message : 'Code refusé.'); })
           .validerCodeCapitaine(email2, code);
+        return;
+      }
+      if (e.target.id === 'form-cap-perso') {
+        e.preventDefault();
+        var email3 = document.getElementById('cap-email').value.trim();
+        var perso = document.getElementById('cap-perso').value;
+        if (!email3) { afficherErreur('Tape ton adresse e-mail.'); return; }
+        var b3 = e.target.querySelector('button');
+        b3.disabled = true;
+        capEmail = email3;
+        serveur()
+          .withSuccessHandler(function (r) { connecterCapitaine(r.jeton, 'cap'); })
+          .withFailureHandler(function (err) {
+            b3.disabled = false;
+            var msg = err && err.message ? err.message : 'Connexion impossible.';
+            if (/^PAS_DE_CODE: /.test(msg)) {
+              // Pas (ou plus) de code capitaine : on bascule sur la connexion par mail.
+              modeMail = true;
+              messageCap = msg.replace(/^PAS_DE_CODE: /, '');
+              rendre();
+            } else {
+              afficherErreur(msg);
+            }
+          })
+          .connexionCodePerso(email3, perso);
+        return;
+      }
+      if (e.target.id === 'form-code-perso') {
+        e.preventDefault();
+        var c1 = document.getElementById('code-perso-1').value, c2 = document.getElementById('code-perso-2').value;
+        if (!/^\d{6}$/.test(c1)) { afficherErreur('Le code doit faire 6 chiffres.'); return; }
+        if (c1 !== c2) { afficherErreur('Les deux codes ne sont pas pareils : retape-les.'); return; }
+        var b4 = e.target.querySelector('button');
+        b4.disabled = true;
+        serveur()
+          .withSuccessHandler(function () {
+            messageCap = 'Code capitaine enregistré. La prochaine fois, tape ton adresse et ce code.';
+            allerA('cap', true);
+          })
+          .withFailureHandler(function (err) {
+            b4.disabled = false;
+            var msg = err && err.message ? err.message : 'Enregistrement impossible.';
+            if (/expirée/.test(msg)) deconnexionCap();
+            afficherErreur(msg);
+          })
+          .definirCodePerso(jeton, c1);
         return;
       }
       if (e.target.id === 'form-renommer') {
@@ -1367,6 +1442,17 @@
       else if (donnees.groupes.length === 1) inscrire(donnees.groupes[0]); // une seule équipe : pas de question
       else { inscription.choixGroupe = true; rendre(); }
     });
+
+    /** Garde le jeton capitaine sur le téléphone puis ouvre l'écran demandé. */
+    function connecterCapitaine(nouveauJeton, ecran) {
+      jeton = nouveauJeton;
+      ecrireJeton(jeton);
+      messageCap = '';
+      serveur()
+        .withSuccessHandler(function (info) { capitaine = info.email; allerA(ecran); })
+        .withFailureHandler(function (err) { afficherErreur(err.message); })
+        .infoCapitaine(jeton);
+    }
 
     function connecter(nom) {
       moi = nom;
