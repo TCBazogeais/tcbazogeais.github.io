@@ -210,6 +210,11 @@
     .grille td.non { background: var(--rouge-clair); }
     .grille td.vide { color: var(--doux); }
     .grille td.hors { color: var(--ligne); }
+    .grille td.case { padding: 0; }
+    .grille td.case button {
+      display: block; width: 100%; min-width: 44px; min-height: 40px; border: 0; background: none;
+      color: inherit; font-size: 14px; font-family: inherit; cursor: pointer;
+    }
     .grille tfoot td { font-weight: 700; border-bottom: 0; }
     .grille tfoot td.total { color: var(--vert); }
     .filtres { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 10px; -webkit-overflow-scrolling: touch; }
@@ -519,7 +524,10 @@
       }
       if (vue !== 'matchs') {
         zoneMoi.hidden = true;
+        var defile = contenu.querySelector('.defile'), gauche = defile ? defile.scrollLeft : 0;
         contenu.innerHTML = ecranCapitaine();
+        defile = contenu.querySelector('.defile');
+        if (defile && gauche) defile.scrollLeft = gauche;
         return;
       }
 
@@ -811,6 +819,36 @@
 
     // ======================= Espace capitaines =======================
 
+    /** Tableau des dispos : le capitaine change la réponse d'un joueur (– → ✅ → ❌ → –). */
+    var repCapEnCours = {}; // id|nom → nb d'enregistrements en attente
+    var lignesTableau = []; // joueurs affichés dans le tableau
+    var lignesFigees = null; // lignes gardées telles quelles après un toucher (jusqu'au prochain filtre ou écran)
+    function repondrePour(id, nom) {
+      var ancienne = reponseDe(id, nom);
+      var nouvelle = ancienne === '' ? 'Présent' : ancienne === 'Présent' ? 'Absent' : '';
+      var cle = id + '|' + nom;
+      if (!lignesFigees) lignesFigees = lignesTableau;
+      donnees.reponses[id] = donnees.reponses[id] || {};
+      if (nouvelle) donnees.reponses[id][nom] = nouvelle; else delete donnees.reponses[id][nom];
+      repCapEnCours[cle] = (repCapEnCours[cle] || 0) + 1;
+      rendre();
+      serveur()
+        .withSuccessHandler(function (reponses) {
+          // Une réponse plus ancienne ne doit pas effacer un toucher fait entre-temps.
+          if (--repCapEnCours[cle] === 0 && Object.keys(repCapEnCours).every(function (k) { return !repCapEnCours[k]; })) {
+            donnees.reponses = reponses;
+            if (vue === 'cap-tableau') rendre();
+          }
+        })
+        .withFailureHandler(function (err) {
+          repCapEnCours[cle]--;
+          if (ancienne) donnees.reponses[id][nom] = ancienne; else delete donnees.reponses[id][nom];
+          rendre();
+          afficherErreur('Réponse de ' + nom + ' non enregistrée : ' + (err && err.message ? err.message : 'problème de connexion') + '. Réessaie.');
+        })
+        .repondre([id], nom, nouvelle);
+    }
+
     function ecranCapitaine() {
       if (!capitaine) return jeton ? '<div class="vide">Connexion…</div>' : ecranConnexionCap();
       if (vue === 'cap-form') return ecranFormRencontre();
@@ -1015,6 +1053,9 @@
           t[1] + ' (' + nb + ')</button>';
       }).join('') + '</div>';
       if (filtreReponse) joueurs = joueurs.filter(function (j) { return aCase(j, filtreReponse); });
+      // Pendant que le capitaine touche des cases, les lignes ne bougent pas (ni tri, ni filtre).
+      if (lignesFigees) joueurs = lignesFigees.map(joueur).filter(Boolean);
+      lignesTableau = joueurs.map(function (j) { return j.nom; });
       if (!joueurs.length) return html + '<div class="vide">Aucun joueur pour ce filtre.</div></div>';
       html += '<div class="defile"><table class="grille"><thead><tr><th class="nom">Joueur</th>' +
         rs.map(function (r) {
@@ -1027,13 +1068,16 @@
           total++;
           var rep = reponseDe(r.id, j.nom);
           if (rep) n++;
-          return rep === 'Présent' ? '<td class="oui">✅</td>' : rep === 'Absent' ? '<td class="non">❌</td>' : '<td class="vide">–</td>';
+          // Le capitaine touche la case : – → ✅ → ❌ → –
+          return '<td class="case ' + (rep === 'Présent' ? 'oui' : rep === 'Absent' ? 'non' : 'vide') + '">' +
+            '<button data-cap-rep="' + esc(r.id) + '" data-cap-nom="' + esc(j.nom) + '">' +
+            (rep === 'Présent' ? '✅' : rep === 'Absent' ? '❌' : '–') + '</button></td>';
         }).join('') + '<td>' + n + '/' + total + '</td></tr>';
       });
       html += '</tbody><tfoot><tr><td class="nom">Dispos</td>' + rs.map(function (r) {
         return '<td class="total">' + bilan(r).presents.length + '</td>';
       }).join('') + '<td></td></tr></tfoot></table></div>' +
-        '<p class="legende">✅ dispo · ❌ pas dispo · – pas encore répondu.' +
+        '<p class="legende">✅ dispo · ❌ pas dispo · – pas encore répondu. Touche une case pour changer la réponse du joueur.' +
         (filtreJour ? ' Joueurs triés : dispos d\'abord.' : ' Fais glisser le tableau vers la gauche pour voir tous les matchs.') + '</p>';
       return html + '</div>';
     }
@@ -1423,6 +1467,7 @@
     function afficherEcran(etat) {
       selId = etat.vue === 'cap-selection' ? etat.sel : '';
       renommage = null;
+      lignesFigees = null;
       if (etat.vue !== vue && !garderMessage) messageCap = '';
       garderMessage = false;
       vue = etat.vue;
@@ -1544,9 +1589,11 @@
         rendre();
       } else if (cible.hasAttribute('data-filtre-reponse')) {
         filtreReponse = cible.getAttribute('data-filtre-reponse');
+        lignesFigees = null;
         rendre();
       } else if (cible.hasAttribute('data-filtre-jour')) {
         filtreJour = cible.getAttribute('data-filtre-jour');
+        lignesFigees = null;
         rendre();
       } else if (cible.id === 'lancer-import') {
         lancerImport();
@@ -1587,6 +1634,8 @@
         ecrireNom(null);
         choixMoi = '';
         rendre();
+      } else if (cible.hasAttribute('data-cap-rep')) {
+        repondrePour(cible.getAttribute('data-cap-rep'), cible.getAttribute('data-cap-nom'));
       } else if (cible.hasAttribute('data-rep')) {
         repondre(cible.getAttribute('data-id'), cible.getAttribute('data-rep'));
       }
